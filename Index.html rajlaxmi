@@ -108,147 +108,254 @@ tr.live td{ color:#ffda58; }
 </section>
 </div>
 
-<script>
-const DRAW_START=9, DRAW_END=21, SLOT_MIN=15;
-const pad2=n=>n.toString().padStart(2,'0');
-const adminPassword="admin123";
+<!-- Firebase SDKs -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+import { getFirestore, doc, setDoc, onSnapshot, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-let drawsToday=[], pastDraws=[];
+// Global variables to be used throughout the script
+const DRAW_START = 9, DRAW_END = 21, SLOT_MIN = 15;
+const pad2 = n => n.toString().padStart(2, '0');
+const adminPassword = "admin123";
 
-function generateDraws(){
-  drawsToday=[];
-  const now=new Date();
-  const dateStr=now.toISOString().split('T')[0];
-  for(let h=DRAW_START;h<DRAW_END;h++){
-    for(let m=0;m<60;m+=SLOT_MIN){
-      let time=pad2(h)+":"+pad2(m);
-      drawsToday.push({
-        time:time,
-        A:String(Math.floor(Math.random()*100)).padStart(2,'0'),
-        B:String(Math.floor(Math.random()*100)).padStart(2,'0'),
-        C:String(Math.floor(Math.random()*100)).padStart(2,'0'),
-        date:dateStr
-      });
+let drawsToday = [];
+
+let db, auth, userId;
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Function to handle Firebase initialization and authentication
+async function initializeFirebase() {
+    try {
+        const app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+
+        // Listen for authentication state changes
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+                console.log("User authenticated:", userId);
+                // Start listening for real-time data from Firestore
+                startFirestoreListener();
+            } else {
+                console.log("No user signed in. Signing in anonymously.");
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    console.error("Authentication failed:", error);
+                }
+            }
+        });
+    } catch (error) {
+        console.error("Firebase initialization failed:", error);
     }
-  }
 }
 
-function checkLogin(){
-  const pass=document.getElementById('adminPass').value;
-  if(pass===adminPassword){
-    document.getElementById('adminLogin').style.display='none';
-    document.getElementById('adminPanel').style.display='block';
-    populateAdmin();
-  } else alert("Wrong password!");
-}
+// Function to generate a full day's draws
+function generateDailyDraws() {
+    const newDraws = [];
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
 
-function logoutAdmin(){
-  document.getElementById('adminPanel').style.display='none';
-  document.getElementById('adminLogin').style.display='flex';
-  document.getElementById('adminPass').value='';
-}
-
-function populateAdmin(){
-  const list=document.getElementById('adminList');
-  list.innerHTML='';
-  drawsToday.forEach((slot,i)=>{
-    const div=document.createElement('div'); div.className='admin-item';
-    div.innerHTML=`
-      <div class="admin-time">${slot.time}</div>
-      <input type="text" value="${slot.A}" id="inputA${i}" maxlength="2">
-      <input type="text" value="${slot.B}" id="inputB${i}" maxlength="2">
-      <input type="text" value="${slot.C}" id="inputC${i}" maxlength="2">
-    `;
-    list.appendChild(div);
-  });
-}
-
-function saveAdmin(){
-  drawsToday.forEach((slot,i)=>{
-    slot.A=document.getElementById(`inputA${i}`).value.padStart(2,'0');
-    slot.B=document.getElementById(`inputB${i}`).value.padStart(2,'0');
-    slot.C=document.getElementById(`inputC${i}`).value.padStart(2,'0');
-  });
-  alert("Saved! Changes will reflect when live.");
-}
-
-function resetToday(){
-  generateDraws();
-  if(document.getElementById('adminPanel').style.display==='block') populateAdmin();
-  alert("Today's draws reset.");
-}
-
-function exportCSV(){
-  let csv="Time,A,B,C\n";
-  drawsToday.forEach(d=>csv+=`${d.time},${d.A},${d.B},${d.C}\n`);
-  const blob=new Blob([csv],{type:'text/csv'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a'); a.href=url; a.download='draws.csv'; a.click();
-}
-
-function showTab(tab){
-  document.getElementById('live').style.display=tab==='live'?'block':'none';
-  document.getElementById('history').style.display=tab==='history'?'block':'none';
-  document.getElementById('admin').style.display=tab==='admin'?'block':'none';
-  document.getElementById('tab-live').classList.toggle('active',tab==='live');
-  document.getElementById('tab-history').classList.toggle('active',tab==='history');
-  document.getElementById('tab-admin').classList.toggle('active',tab==='admin');
-}
-
-function updateLive(){
-  const now=new Date();
-  document.getElementById('dateNow').textContent=now.toLocaleString();
-
-  const currMinutes=now.getHours()*60+now.getMinutes();
-  let nextSlotObj=null;
-  for(const slot of drawsToday){
-    const [h,m]=slot.time.split(':').map(Number);
-    if(h*60+m>currMinutes){ nextSlotObj=slot; break; }
-  }
-  if(nextSlotObj){
-    const [h,m]=nextSlotObj.time.split(':').map(Number);
-    const nextDate=new Date(); nextDate.setHours(h); nextDate.setMinutes(m); nextDate.setSeconds(0); nextDate.setMilliseconds(0);
-    const diff=Math.max(0,(nextDate-now)/1000);
-    const mins=Math.floor(diff/60), secs=Math.floor(diff%60);
-    document.getElementById('countdown').textContent=`${pad2(mins)} : ${pad2(secs)}`;
-    document.getElementById('nextSlot').textContent=nextSlotObj.time;
-  } else {
-    document.getElementById('countdown').textContent='-- : --';
-    document.getElementById('nextSlot').textContent='--';
-  }
-
-  const liveSlot=drawsToday.find(slot=>{
-    const [h,m]=slot.time.split(':').map(Number);
-    return now.getHours()===h && Math.floor(now.getMinutes()/SLOT_MIN)*SLOT_MIN===m;
-  });
-  document.getElementById('valA').textContent=liveSlot?liveSlot.A:'--';
-  document.getElementById('valB').textContent=liveSlot?liveSlot.B:'--';
-  document.getElementById('valC').textContent=liveSlot?liveSlot.C:'--';
-
-  populateTodayTable();
-}
-
-function populateTodayTable(){
-  const tbody=document.getElementById('tbodyToday');
-  tbody.innerHTML='';
-  const now=new Date();
-  const currMinutes=now.getHours()*60+now.getMinutes();
-  drawsToday.forEach(slot=>{
-    const [h,m]=slot.time.split(':').map(Number);
-    const slotMinutes=h*60+m;
-    if(slotMinutes<=currMinutes){
-      const tr=document.createElement('tr');
-      if(slotMinutes===Math.floor(currMinutes/SLOT_MIN)*SLOT_MIN) tr.className='live';
-      tr.innerHTML=`<td>${slot.time}</td><td>${slot.A}</td><td>${slot.B}</td><td>${slot.C}</td>`;
-      tbody.appendChild(tr);
+    for (let h = DRAW_START; h < DRAW_END; h++) {
+        for (let m = 0; m < 60; m += SLOT_MIN) {
+            let time = pad2(h) + ":" + pad2(m);
+            newDraws.push({
+                time: time,
+                A: String(Math.floor(Math.random() * 100)).padStart(2, '0'),
+                B: String(Math.floor(Math.random() * 100)).padStart(2, '0'),
+                C: String(Math.floor(Math.random() * 100)).padStart(2, '0'),
+                date: dateStr
+            });
+        }
     }
-  });
+    return newDraws;
 }
 
-// INITIAL
-generateDraws();
-updateLive();
-setInterval(updateLive,1000);
+// Function to save draws to Firestore
+async function saveDrawsToFirestore(draws) {
+    const today = new Date().toISOString().split('T')[0];
+    const docRef = doc(db, `artifacts/${appId}/public/data/lotteryDraws`, today);
+    try {
+        await setDoc(docRef, { draws: draws });
+        console.log("Draws saved to Firestore successfully.");
+    } catch (e) {
+        console.error("Error saving document: ", e);
+    }
+}
+
+// Function to reset today's draws in Firestore
+async function resetTodayInFirestore() {
+    const newDraws = generateDailyDraws();
+    await saveDrawsToFirestore(newDraws);
+}
+
+// Main function to listen for real-time updates from Firestore
+function startFirestoreListener() {
+    const today = new Date().toISOString().split('T')[0];
+    const docRef = doc(db, `artifacts/${appId}/public/data/lotteryDraws`, today);
+
+    // Set up a real-time listener for the document
+    onSnapshot(docRef, async (docSnap) => {
+        if (docSnap.exists()) {
+            // Document exists, update the draws
+            const data = docSnap.data();
+            drawsToday = data.draws;
+            console.log("Draws loaded from Firestore.");
+        } else {
+            // Document does not exist, create it with new draws
+            console.log("No draws found for today. Generating and saving new ones.");
+            const newDraws = generateDailyDraws();
+            await saveDrawsToFirestore(newDraws);
+        }
+
+        // Update the UI after data is loaded or changed
+        updateLive();
+        if (document.getElementById('adminPanel').style.display === 'block') {
+            populateAdmin();
+        }
+    });
+}
+
+function checkLogin() {
+    const pass = document.getElementById('adminPass').value;
+    if (pass === adminPassword) {
+        document.getElementById('adminLogin').style.display = 'none';
+        document.getElementById('adminPanel').style.display = 'block';
+        populateAdmin();
+    } else {
+        alert("Wrong password!");
+    }
+}
+
+function logoutAdmin() {
+    document.getElementById('adminPanel').style.display = 'none';
+    document.getElementById('adminLogin').style.display = 'flex';
+    document.getElementById('adminPass').value = '';
+}
+
+function populateAdmin() {
+    const list = document.getElementById('adminList');
+    list.innerHTML = '';
+    drawsToday.forEach((slot, i) => {
+        const div = document.createElement('div');
+        div.className = 'admin-item';
+        div.innerHTML = `
+            <div class="admin-time">${slot.time}</div>
+            <input type="text" value="${slot.A}" id="inputA${i}" maxlength="2">
+            <input type="text" value="${slot.B}" id="inputB${i}" maxlength="2">
+            <input type="text" value="${slot.C}" id="inputC${i}" maxlength="2">
+        `;
+        list.appendChild(div);
+    });
+}
+
+function saveAdmin() {
+    drawsToday.forEach((slot, i) => {
+        slot.A = document.getElementById(`inputA${i}`).value.padStart(2, '0');
+        slot.B = document.getElementById(`inputB${i}`).value.padStart(2, '0');
+        slot.C = document.getElementById(`inputC${i}`).value.padStart(2, '0');
+    });
+    // Now save to Firestore
+    saveDrawsToFirestore(drawsToday);
+    alert("Saved! Changes will reflect when live.");
+}
+
+function resetToday() {
+    // This will force the generation of new draws in Firestore
+    resetTodayInFirestore();
+    alert("Today's draws reset.");
+}
+
+function exportCSV() {
+    let csv = "Time,A,B,C\n";
+    drawsToday.forEach(d => csv += `${d.time},${d.A},${d.B},${d.C}\n`);
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'draws.csv';
+    a.click();
+}
+
+function showTab(tab) {
+    document.getElementById('live').style.display = tab === 'live' ? 'block' : 'none';
+    document.getElementById('history').style.display = tab === 'history' ? 'block' : 'none';
+    document.getElementById('admin').style.display = tab === 'admin' ? 'block' : 'none';
+    document.getElementById('tab-live').classList.toggle('active', tab === 'live');
+    document.getElementById('tab-history').classList.toggle('active', tab === 'history');
+    document.getElementById('tab-admin').classList.toggle('active', tab === 'admin');
+}
+
+function updateLive() {
+    const now = new Date();
+    document.getElementById('dateNow').textContent = now.toLocaleString();
+
+    const currMinutes = now.getHours() * 60 + now.getMinutes();
+    let nextSlotObj = null;
+    for (const slot of drawsToday) {
+        const [h, m] = slot.time.split(':').map(Number);
+        if (h * 60 + m > currMinutes) {
+            nextSlotObj = slot;
+            break;
+        }
+    }
+    if (nextSlotObj) {
+        const [h, m] = nextSlotObj.time.split(':').map(Number);
+        const nextDate = new Date();
+        nextDate.setHours(h);
+        nextDate.setMinutes(m);
+        nextDate.setSeconds(0);
+        nextDate.setMilliseconds(0);
+        const diff = Math.max(0, (nextDate - now) / 1000);
+        const mins = Math.floor(diff / 60),
+            secs = Math.floor(diff % 60);
+        document.getElementById('countdown').textContent = `${pad2(mins)} : ${pad2(secs)}`;
+        document.getElementById('nextSlot').textContent = nextSlotObj.time;
+    } else {
+        document.getElementById('countdown').textContent = '-- : --';
+        document.getElementById('nextSlot').textContent = '--';
+    }
+
+    const liveSlot = drawsToday.find(slot => {
+        const [h, m] = slot.time.split(':').map(Number);
+        const currentSlotMinutes = Math.floor(now.getMinutes() / SLOT_MIN) * SLOT_MIN;
+        return now.getHours() === h && currentSlotMinutes === m;
+    });
+    document.getElementById('valA').textContent = liveSlot ? liveSlot.A : '--';
+    document.getElementById('valB').textContent = liveSlot ? liveSlot.B : '--';
+    document.getElementById('valC').textContent = liveSlot ? liveSlot.C : '--';
+
+    populateTodayTable();
+}
+
+function populateTodayTable() {
+    const tbody = document.getElementById('tbodyToday');
+    tbody.innerHTML = '';
+    const now = new Date();
+    const currMinutes = now.getHours() * 60 + now.getMinutes();
+    drawsToday.forEach(slot => {
+        const [h, m] = slot.time.split(':').map(Number);
+        const slotMinutes = h * 60 + m;
+        if (slotMinutes <= currMinutes) {
+            const tr = document.createElement('tr');
+            if (slotMinutes === Math.floor(currMinutes / SLOT_MIN) * SLOT_MIN) tr.className = 'live';
+            tr.innerHTML = `<td>${slot.time}</td><td>${slot.A}</td><td>${slot.B}</td><td>${slot.C}</td>`;
+            tbody.appendChild(tr);
+        }
+    });
+}
+
+// Start the app by initializing Firebase
+initializeFirebase();
+setInterval(updateLive, 1000);
 </script>
 </body>
 </html>
